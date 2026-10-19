@@ -1,9 +1,12 @@
 package com.example.metrolauncher
 
-import android.Manifest
+import android.accessibilityservice.AccessibilityService
+import android.appactivity.result.contract.ActivityResultContracts
+import android.appwidget.AppWidgetHost
+import android.appwidget.AppWidgetManager
+import android.appwidget.AppWidgetProviderInfo
 import android.content.Intent
 import android.content.IntentFilter
-import android.content.pm.PackageManager
 import android.content.pm.ResolveInfo
 import android.database.Cursor
 import android.graphics.drawable.Drawable
@@ -11,10 +14,8 @@ import android.os.BatteryManager
 import android.os.Bundle
 import android.provider.CallLog
 import android.provider.Settings
-import android.telephony.TelephonyManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
@@ -41,34 +42,58 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.core.content.ContextCompat
 import androidx.core.graphics.drawable.toBitmap
 import java.text.SimpleDateFormat
 import java.util.*
 
+class WpAccessibilityService : AccessibilityService() {
+    override fun onAccessibilityEvent(event: android.view.accessibility.AccessibilityEvent?) {}
+    override fun onInterrupt() {}
+
+    companion object {
+        var instance: WpAccessibilityService? = null
+    }
+
+    override fun onServiceConnected() {
+        super.onServiceConnected()
+        instance = this
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        instance = null
+    }
+
+    fun lockScreen() {
+        performGlobalAction(GLOBAL_ACTION_LOCK_SCREEN)
+    }
+}
+
 class MainActivity : ComponentActivity() {
 
-    private val requestPermissionLauncher = registerForActivityResult(
-        ActivityResultContracts.RequestMultiplePermissions()
-    ) { _ -> }
+    private lateinit var appWidgetManager: AppWidgetManager
+    private lateinit var appWidgetHost: AppWidgetHost
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        
-        // طلب صلاحيات النظام الحساسة لقراءة المكالمات والرسائل لعرضها في الـ Widgets
-        requestPermissionLauncher.launch(
-            arrayOf(
-                Manifest.permission.READ_CALL_LOG,
-                Manifest.permission.READ_SMS,
-                Manifest.permission.READ_CONTACTS
-            )
-        )
+
+        // إعداد مضيف الـ Widgets الحقيقي الخاص بالنظام
+        appWidgetManager = AppWidgetManager.getInstance(this)
+        appWidgetHost = AppWidgetHost(this, 1024)
+        appWidgetHost.startListening()
 
         setContent {
             WindowsPhoneTheme {
                 WindowsPhoneLauncherScreen()
             }
         }
+    }
+
+    override fun onStop() {
+        super.onStop()
+        try {
+            appWidgetHost.stopListening()
+        } catch (_: Exception) {}
     }
 }
 
@@ -100,20 +125,20 @@ data class AppItem(
     val backgroundColor: Color = WpTileBlue,
     val isWide: Boolean = false,
     val isSystemWidget: Boolean = false,
-    val widgetType: String = "" // "battery", "calls", "sms", "settings"
+    val widgetType: String = ""
 )
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun WindowsPhoneLauncherScreen() {
     val context = LocalContext.current
-    var currentScreen by remember { mutableStateOf(0) } // 0: Start, 1: All Apps, 2: System Settings Hub
+    var currentScreen by remember { mutableStateOf(0) }
+    var searchQuery by remember { mutableStateOf("") }
 
     val currentTime = remember {
         mutableStateOf(SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date()))
     }
 
-    // قراءة نسبة البطارية من النظام
     val batteryLevel = remember {
         val intent = context.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
         val level = intent?.getIntExtra(BatteryManager.EXTRA_LEVEL, -1) ?: 0
@@ -121,7 +146,6 @@ fun WindowsPhoneLauncherScreen() {
         (level * 100 / scale)
     }
 
-    // قراءة المكالمات الفائتة الحقيقية من نظام أندرويد
     val missedCallsCount = remember {
         var count = 0
         try {
@@ -138,7 +162,6 @@ fun WindowsPhoneLauncherScreen() {
         count
     }
 
-    // قراءة الرسائل القصيرة غير المقروءة الحقيقية من النظام
     val unreadSmsCount = remember {
         var count = 0
         try {
@@ -155,7 +178,6 @@ fun WindowsPhoneLauncherScreen() {
         count
     }
 
-    // جلب التطبيقات المثبتة الفعلية
     val installedApps = remember {
         val intent = Intent(Intent.ACTION_MAIN, null).apply {
             addCategory(Intent.CATEGORY_LAUNCHER)
@@ -172,13 +194,17 @@ fun WindowsPhoneLauncherScreen() {
         }.sortedBy { it.title.lowercase() }
     }
 
-    // المربعات الحية المثبتة في شاشة البداية المرتبطة بالنظام
+    val filteredApps = installedApps.filter {
+        it.title.contains(searchQuery, ignoreCase = true)
+    }
+
     val pinnedTiles = remember {
         mutableStateListOf<AppItem>().apply {
             add(AppItem("Phone", "com.android.dialer", backgroundColor = WpTileBlue, isWide = true, isSystemWidget = true, widgetType = "calls"))
             add(AppItem("Messaging", "com.android.mms", backgroundColor = WpTileGreen, isWide = false, isSystemWidget = true, widgetType = "sms"))
             add(AppItem("Battery", "", backgroundColor = WpTileOrange, isWide = false, isSystemWidget = true, widgetType = "battery"))
-            add(AppItem("Settings", "launcher.settings", backgroundColor = WpTilePurple, isWide = true, isSystemWidget = true, widgetType = "settings"))
+            add(AppItem("Lock Screen", "", backgroundColor = WpTilePurple, isWide = false, isSystemWidget = true, widgetType = "lock"))
+            add(AppItem("Settings", "launcher.settings", backgroundColor = WpTileDark, isWide = true, isSystemWidget = true, widgetType = "settings"))
         }
     }
 
@@ -201,7 +227,6 @@ fun WindowsPhoneLauncherScreen() {
     ) {
         when (currentScreen) {
             0 -> {
-                // شاشة البداية (Start Screen)
                 Column(modifier = Modifier.fillMaxSize()) {
                     Spacer(modifier = Modifier.height(28.dp))
                     Row(
@@ -259,10 +284,10 @@ fun WindowsPhoneLauncherScreen() {
                                     if (tile.isSystemWidget) {
                                         when (tile.widgetType) {
                                             "settings" -> currentScreen = 2
+                                            "lock" -> WpAccessibilityService.instance?.lockScreen()
                                             "calls" -> {
                                                 try {
-                                                    val intent = Intent(Intent.ACTION_DIAL)
-                                                    context.startActivity(intent)
+                                                    context.startActivity(Intent(Intent.ACTION_DIAL))
                                                 } catch (_: Exception) {}
                                             }
                                             "sms" -> {
@@ -293,7 +318,6 @@ fun WindowsPhoneLauncherScreen() {
                 }
             }
             1 -> {
-                // شاشة قائمة التطبيقات (All Apps Drawer)
                 Column(modifier = Modifier.fillMaxSize()) {
                     Spacer(modifier = Modifier.height(28.dp))
                     Row(
@@ -316,7 +340,22 @@ fun WindowsPhoneLauncherScreen() {
                                 .padding(4.dp)
                         )
                     }
-                    Spacer(modifier = Modifier.height(16.dp))
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    OutlinedTextField(
+                        value = searchQuery,
+                        onValueChange = { searchQuery = it },
+                        placeholder = { Text("Search apps...", color = Color.Gray) },
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = WpTileBlue,
+                            unfocusedBorderColor = Color.DarkGray,
+                            focusedTextColor = WpTextWhite,
+                            unfocusedTextColor = WpTextWhite
+                        ),
+                        singleLine = true
+                    )
+                    Spacer(modifier = Modifier.height(12.dp))
 
                     LazyVerticalGrid(
                         columns = GridCells.Fixed(1),
@@ -325,7 +364,7 @@ fun WindowsPhoneLauncherScreen() {
                             .weight(1f),
                         verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        items(installedApps) { app ->
+                        items(filteredApps) { app ->
                             Row(
                                 modifier = Modifier
                                     .fillMaxWidth()
@@ -366,7 +405,6 @@ fun WindowsPhoneLauncherScreen() {
                 }
             }
             2 -> {
-                // مركز إعدادات وصلاحيات النظام الشامل (System Settings & Integration Hub)
                 Column(modifier = Modifier.fillMaxSize()) {
                     Spacer(modifier = Modifier.height(28.dp))
                     Row(
@@ -399,7 +437,7 @@ fun WindowsPhoneLauncherScreen() {
                         item {
                             SystemSettingCard(
                                 title = "Set Default Home Launcher",
-                                description = "Open system home settings to make Windows Phone your primary launcher.",
+                                description = "Make Metro UI your permanent home launcher.",
                                 onClick = {
                                     try {
                                         context.startActivity(Intent(Settings.ACTION_HOME_SETTINGS))
@@ -409,8 +447,19 @@ fun WindowsPhoneLauncherScreen() {
                         }
                         item {
                             SystemSettingCard(
+                                title = "Enable Accessibility Service",
+                                description = "Grant permission for system lock screen gestures and shortcuts.",
+                                onClick = {
+                                    try {
+                                        context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+                                    } catch (_: Exception) {}
+                                }
+                            )
+                        }
+                        item {
+                            SystemSettingCard(
                                 title = "Display & Brightness",
-                                description = "Configure screen timeout, brightness, and display settings.",
+                                description = "Manage system screen orientation, timeout, and display.",
                                 onClick = {
                                     try {
                                         context.startActivity(Intent(Settings.ACTION_DISPLAY_SETTINGS))
@@ -420,19 +469,8 @@ fun WindowsPhoneLauncherScreen() {
                         }
                         item {
                             SystemSettingCard(
-                                title = "Sound & Volume",
-                                description = "Manage ringtones, media volumes, and device notifications.",
-                                onClick = {
-                                    try {
-                                        context.startActivity(Intent(Settings.ACTION_SOUND_SETTINGS))
-                                    } catch (_: Exception) {}
-                                }
-                            )
-                        }
-                        item {
-                            SystemSettingCard(
-                                title = "Full Android Settings",
-                                description = "Access all system configurations, accounts, and hardware settings.",
+                                title = "Android Full Settings",
+                                description = "Access device hardware settings, permissions, and accounts.",
                                 onClick = {
                                     try {
                                         context.startActivity(Intent(Settings.ACTION_SETTINGS))
@@ -550,6 +588,9 @@ fun FlipableMetroTile(
                         } else {
                             Spacer(modifier = Modifier.size(24.dp))
                         }
+                    }
+                    "lock" -> {
+                        Text(text = "🔒 Lock", color = WpTextWhite, fontSize = 18.sp, fontWeight = FontWeight.Bold)
                     }
                     else -> {
                         Spacer(modifier = Modifier.size(24.dp))
