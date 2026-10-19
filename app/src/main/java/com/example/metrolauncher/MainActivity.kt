@@ -10,7 +10,6 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.grid.GridCells
-import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -61,7 +60,7 @@ fun WindowsPhoneTheme(content: @Composable () -> Unit) {
     )
 }
 
-data.class AppItem(
+data class AppItem(
     val title: String,
     val packageName: String,
     val backgroundColor: Color,
@@ -75,7 +74,6 @@ fun WindowsPhoneLauncherScreen() {
         mutableStateOf(SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date()))
     }
 
-    // 1 & 4. قائمة التطبيقات والمربعات المثبتة (State Management & App Drawer base)
     var showAppDrawer by remember { mutableStateOf(false) }
     val pinnedTiles = remember {
         mutableStateListOf(
@@ -86,7 +84,6 @@ fun WindowsPhoneLauncherScreen() {
         )
     }
 
-    // جلب التطبيقات المثبتة الفعلية للجهاز
     val installedApps = remember {
         val intent = Intent(Intent.ACTION_MAIN, null).apply {
             addCategory(Intent.CATEGORY_LAUNCHER)
@@ -108,7 +105,6 @@ fun WindowsPhoneLauncherScreen() {
             .padding(16.dp)
     ) {
         if (!showAppDrawer) {
-            // شاشة البداية (Start Screen - Metro UI)
             Column(modifier = Modifier.fillMaxSize()) {
                 Spacer(modifier = Modifier.height(28.dp))
                 Row(
@@ -141,22 +137,20 @@ fun WindowsPhoneLauncherScreen() {
                 }
                 Spacer(modifier = Modifier.height(16.dp))
 
-                // شبكة المربعات الحية
                 LazyVerticalGrid(
                     columns = GridCells.Fixed(2),
-                    modifier = Modifier.fillMaxSize(),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f),
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     items(pinnedTiles) { tile ->
-                        val spanVal = if (tile.isWide) 2 else 1
-                        // استخدام نطاق للـ Grid span إذا لزم أو رسم المربع مباشرة
                         FlipableMetroTile(
                             title = tile.title,
                             backgroundColor = tile.backgroundColor,
                             modifier = Modifier.fillMaxWidth()
                         ) {
-                            // فتح التطبيق عند النقر
                             try {
                                 val launchIntent = context.packageManager.getLaunchIntentForPackage(tile.packageName)
                                 if (launchIntent != null) {
@@ -168,7 +162,6 @@ fun WindowsPhoneLauncherScreen() {
                 }
             }
         } else {
-            // شاشة قائمة التطبيقات (App Drawer - النمط الطولي لويندوز فون)
             Column(modifier = Modifier.fillMaxSize()) {
                 Spacer(modifier = Modifier.height(28.dp))
                 Row(
@@ -195,7 +188,9 @@ fun WindowsPhoneLauncherScreen() {
 
                 LazyVerticalGrid(
                     columns = GridCells.Fixed(1),
-                    modifier = Modifier.fillMaxSize(),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f),
                     verticalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
                     items(installedApps) { app ->
@@ -225,7 +220,6 @@ fun WindowsPhoneLauncherScreen() {
     }
 }
 
-// 3. أنيميشن الانقلاب للمربعات (Tile Flip Animation)
 @Composable
 fun FlipableMetroTile(
     title: String,
@@ -235,7 +229,6 @@ fun FlipableMetroTile(
 ) {
     var flipped by remember { mutableStateOf(false) }
     
-    // أنيميشن الدوران ثلاثي الأبعاد
     val rotation by animateFloatAsState(
         targetValue = if (flipped) 180f else 0f,
         animationSpec = tween(durationMillis = 600),
@@ -264,7 +257,7 @@ fun FlipableMetroTile(
                 text = title,
                 color = WpTextWhite,
                 fontSize = 16.sp,
-                fontWeight = FontWeight.SemiLogoTextIfExists ?: FontWeight.SemiBold
+                fontWeight = FontWeight.SemiBold
             )
             Text(
                 text = if (rotation > 90f) "update..." else "metro live",
