@@ -1,8 +1,8 @@
 package com.example.metrolauncher
 
 import android.accessibilityservice.AccessibilityService
-import android.appactivity.result.contract.ActivityResultContracts
 import android.appwidget.AppWidgetHost
+import android.appwidget.AppWidgetHostView
 import android.appwidget.AppWidgetManager
 import android.appwidget.AppWidgetProviderInfo
 import android.content.Intent
@@ -16,6 +16,7 @@ import android.provider.CallLog
 import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
@@ -42,6 +43,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.graphics.drawable.toBitmap
 import java.text.SimpleDateFormat
 import java.util.*
@@ -74,17 +76,46 @@ class MainActivity : ComponentActivity() {
     private lateinit var appWidgetManager: AppWidgetManager
     private lateinit var appWidgetHost: AppWidgetHost
 
+    private val selectWidgetLauncher = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode == RESULT_OK) {
+            val data = result.data
+            val widgetId = data?.getIntExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, -1) ?: -1
+            if (widgetId != -1) {
+                val appWidgetInfo = appWidgetManager.getAppWidgetInfo(widgetId)
+                if (appWidgetInfo != null) {
+                    onWidgetAddedListener?.invoke(widgetId, appWidgetInfo)
+                }
+            }
+        }
+    }
+
+    var onWidgetAddedListener: ((Int, AppWidgetProviderInfo) -> Unit)? = null
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // إعداد مضيف الـ Widgets الحقيقي الخاص بالنظام
         appWidgetManager = AppWidgetManager.getInstance(this)
-        appWidgetHost = AppWidgetHost(this, 1024)
+        appWidgetHost = AppWidgetHost(this, 2026)
         appWidgetHost.startListening()
 
         setContent {
             WindowsPhoneTheme {
-                WindowsPhoneLauncherScreen()
+                WindowsPhoneLauncherScreen(
+                    onPickWidget = { onAdded ->
+                        onWidgetAddedListener = onAdded
+                        val appWidgetId = appWidgetHost.allocateAppWidgetId()
+                        val pickIntent = Intent(AppWidgetManager.ACTION_APPWIDGET_PICK).apply {
+                            putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, appWidgetId)
+                        }
+                        selectWidgetLauncher.launch(pickIntent)
+                    },
+                    createWidgetView = { widgetId ->
+                        val info = appWidgetManager.getAppWidgetInfo(widgetId)
+                        appWidgetHost.createView(this, widgetId, info)
+                    }
+                )
             }
         }
     }
@@ -118,6 +149,11 @@ fun WindowsPhoneTheme(content: @Composable () -> Unit) {
     )
 }
 
+data class SystemWidgetHolder(
+    val id: Int,
+    val info: AppWidgetProviderInfo
+)
+
 data class AppItem(
     val title: String,
     val packageName: String,
@@ -130,10 +166,15 @@ data class AppItem(
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-fun WindowsPhoneLauncherScreen() {
+fun WindowsPhoneLauncherScreen(
+    onPickWidget: ((Int, AppWidgetProviderInfo) -> Unit) -> Unit,
+    createWidgetView: (Int) -> AppWidgetHostView
+) {
     val context = LocalContext.current
     var currentScreen by remember { mutableStateOf(0) }
     var searchQuery by remember { mutableStateOf("") }
+
+    val customWidgets = remember { mutableStateListOf<SystemWidgetHolder>() }
 
     val currentTime = remember {
         mutableStateOf(SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date()))
@@ -245,6 +286,19 @@ fun WindowsPhoneLauncherScreen() {
                             horizontalArrangement = Arrangement.spacedBy(12.dp)
                         ) {
                             Text(
+                                text = "+ widget",
+                                color = WpTileBlue,
+                                fontSize = 16.sp,
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier
+                                    .clickable {
+                                        onPickWidget { id, info ->
+                                            customWidgets.add(SystemWidgetHolder(id, info))
+                                        }
+                                    }
+                                    .padding(4.dp)
+                            )
+                            Text(
                                 text = "apps →",
                                 color = WpTextWhite.copy(alpha = 0.6f),
                                 fontSize = 16.sp,
@@ -313,6 +367,26 @@ fun WindowsPhoneLauncherScreen() {
                                     }
                                 }
                             )
+                        }
+
+                        // عرض الويدجت الحقيقية المضافة من قبل المستخدم (Android System Widgets)
+                        items(
+                            items = customWidgets,
+                            span = { GridItemSpan(2) }
+                        ) { widgetHolder ->
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(180.dp)
+                                    .clip(RoundedCornerShape(4.dp))
+                                    .background(WpTileDark)
+                                    .padding(4.dp)
+                            ) {
+                                AndroidView(
+                                    factory = { createWidgetView(widgetHolder.id) },
+                                    modifier = Modifier.fillMaxSize()
+                                )
+                            }
                         }
                     }
                 }
@@ -437,7 +511,7 @@ fun WindowsPhoneLauncherScreen() {
                         item {
                             SystemSettingCard(
                                 title = "Set Default Home Launcher",
-                                description = "Make Metro UI your permanent home launcher.",
+                                description = "Make Metro UI your primary home launcher.",
                                 onClick = {
                                     try {
                                         context.startActivity(Intent(Settings.ACTION_HOME_SETTINGS))
@@ -448,7 +522,7 @@ fun WindowsPhoneLauncherScreen() {
                         item {
                             SystemSettingCard(
                                 title = "Enable Accessibility Service",
-                                description = "Grant permission for system lock screen gestures and shortcuts.",
+                                description = "Grant permission for system lock screen gestures.",
                                 onClick = {
                                     try {
                                         context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
@@ -459,7 +533,7 @@ fun WindowsPhoneLauncherScreen() {
                         item {
                             SystemSettingCard(
                                 title = "Display & Brightness",
-                                description = "Manage system screen orientation, timeout, and display.",
+                                description = "Manage system screen orientation and brightness.",
                                 onClick = {
                                     try {
                                         context.startActivity(Intent(Settings.ACTION_DISPLAY_SETTINGS))
@@ -470,7 +544,7 @@ fun WindowsPhoneLauncherScreen() {
                         item {
                             SystemSettingCard(
                                 title = "Android Full Settings",
-                                description = "Access device hardware settings, permissions, and accounts.",
+                                description = "Access device hardware settings and accounts.",
                                 onClick = {
                                     try {
                                         context.startActivity(Intent(Settings.ACTION_SETTINGS))
