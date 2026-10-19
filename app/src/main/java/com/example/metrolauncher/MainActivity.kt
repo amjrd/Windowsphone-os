@@ -2,12 +2,16 @@ package com.example.metro
 
 import android.content.Intent
 import android.content.pm.ResolveInfo
+import android.graphics.drawable.Drawable
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.animation.core.*
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
@@ -19,11 +23,14 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.graphics.drawable.toBitmap
 import java.text.SimpleDateFormat
 import java.util.*
 
@@ -38,13 +45,12 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-// ثيم ألوان ويندوز فون الكلاسيكي
 val WPBackground = Color(0xFF000000)
 val WpTileBlue = Color(0xFF0078D7)
 val WpTileGreen = Color(0xFF107C10)
 val WpTileOrange = Color(0xFFD83B01)
 val WpTilePurple = Color(0xFF5C2D91)
-val WpTileDark = Color(0xFF2D2D2D)
+val WpTileDark = Color(0xFF1F1F1F)
 val WpTextWhite = Color(0xFFFFFFFF)
 
 @Composable
@@ -63,8 +69,8 @@ fun WindowsPhoneTheme(content: @Composable () -> Unit) {
 data class AppItem(
     val title: String,
     val packageName: String,
-    val backgroundColor: Color,
-    val isWide: Boolean = false
+    val icon: Drawable? = null,
+    val backgroundColor: Color = WpTileBlue
 )
 
 @Composable
@@ -75,15 +81,8 @@ fun WindowsPhoneLauncherScreen() {
     }
 
     var showAppDrawer by remember { mutableStateOf(false) }
-    val pinnedTiles = remember {
-        mutableStateListOf(
-            AppItem("Phone", "com.android.dialer", WpTileBlue, true),
-            AppItem("Messaging", "com.android.mms", WpTileGreen, false),
-            AppItem("Store", "com.android.vending", WpTileOrange, false),
-            AppItem("Settings", "com.android.settings", WpTilePurple, false)
-        )
-    }
 
+    // جلب قائمة كافة التطبيقات المثبتة مع أيقوناتها الحقيقية (1. App Icons)
     val installedApps = remember {
         val intent = Intent(Intent.ACTION_MAIN, null).apply {
             addCategory(Intent.CATEGORY_LAUNCHER)
@@ -93,18 +92,41 @@ fun WindowsPhoneLauncherScreen() {
             AppItem(
                 title = it.loadLabel(context.packageManager).toString(),
                 packageName = it.activityInfo.packageName,
-                backgroundColor = WpTileDark
+                icon = it.loadIcon(context.packageManager),
+                backgroundColor = WpTileBlue
             )
+        }.sortedBy { it.title.lowercase() }
+    }
+
+    // 3. إدارة التطبيقات المثبتة في شاشة البداية (Pin / Unpin State)
+    val pinnedTiles = remember {
+        mutableStateListOf<AppItem>().apply {
+            // تثبيت أول 4 تطبيقات افتراضياً إذا كانت موجودة
+            addAll(installedApps.take(6))
         }
     }
 
+    var selectedAppForDialog by remember { mutableStateOf<AppItem?>(null) }
+    var isUnpinDialog by remember { mutableStateOf(false) }
+
+    // 2. السحب الذكي للأجناب (Swipe Gesture support)
     Box(
         modifier = Modifier
             .fillMaxSize()
             .background(WPBackground)
+            .pointerInput(Unit) {
+                detectHorizontalDragGestures { _, dragAmount ->
+                    if (dragAmount < -30) {
+                        showAppDrawer = true // سحب لليسار لفتح القائمة
+                    } else if (dragAmount > 30) {
+                        showAppDrawer = false // سحب لليمن للعودة لشاشة start
+                    }
+                }
+            }
             .padding(16.dp)
     ) {
         if (!showAppDrawer) {
+            // ----- شاشة البداية (Start Screen) -----
             Column(modifier = Modifier.fillMaxSize()) {
                 Spacer(modifier = Modifier.height(28.dp))
                 Row(
@@ -118,11 +140,14 @@ fun WindowsPhoneLauncherScreen() {
                         fontSize = 40.sp,
                         fontWeight = FontWeight.Light
                     )
-                    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
                         Text(
                             text = "apps →",
-                            color = WpTextWhite.copy(alpha = 0.7f),
-                            fontSize = 18.sp,
+                            color = WpTextWhite.copy(alpha = 0.6f),
+                            fontSize = 16.sp,
                             modifier = Modifier
                                 .clickable { showAppDrawer = true }
                                 .padding(4.dp)
@@ -147,21 +172,24 @@ fun WindowsPhoneLauncherScreen() {
                 ) {
                     items(pinnedTiles) { tile ->
                         FlipableMetroTile(
-                            title = tile.title,
-                            backgroundColor = tile.backgroundColor,
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            try {
-                                val launchIntent = context.packageManager.getLaunchIntentForPackage(tile.packageName)
-                                if (launchIntent != null) {
-                                    context.startActivity(launchIntent)
-                                }
-                            } catch (_: Exception) {}
-                        }
+                            appItem = tile,
+                            modifier = Modifier.fillMaxWidth(),
+                            onClick = {
+                                try {
+                                    val launchIntent = context.packageManager.getLaunchIntentForPackage(tile.packageName)
+                                    if (launchIntent != null) context.startActivity(launchIntent)
+                                } catch (_: Exception) {}
+                            },
+                            onLongClick = {
+                                selectedAppForDialog = tile
+                                isUnpinDialog = true
+                            }
+                        )
                     }
                 }
             }
         } else {
+            // ----- شاشة قائمة التطبيقات (All Apps Drawer) -----
             Column(modifier = Modifier.fillMaxSize()) {
                 Spacer(modifier = Modifier.height(28.dp))
                 Row(
@@ -176,9 +204,9 @@ fun WindowsPhoneLauncherScreen() {
                         fontWeight = FontWeight.Light
                     )
                     Text(
-                        text = "← back",
-                        color = WpTextWhite,
-                        fontSize = 18.sp,
+                        text = "← start",
+                        color = WpTextWhite.copy(alpha = 0.6f),
+                        fontSize = 16.sp,
                         modifier = Modifier
                             .clickable { showAppDrawer = false }
                             .padding(4.dp)
@@ -191,21 +219,36 @@ fun WindowsPhoneLauncherScreen() {
                     modifier = Modifier
                         .fillMaxWidth()
                         .weight(1f),
-                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     items(installedApps) { app ->
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .clickable {
-                                    try {
-                                        val intent = context.packageManager.getLaunchIntentForPackage(app.packageName)
-                                        if (intent != null) context.startActivity(intent)
-                                    } catch (_: Exception) {}
-                                }
-                                .padding(vertical = 12.dp, horizontal = 8.dp),
+                                .clip(RoundedCornerShape(4.dp))
+                                .combinedClickable(
+                                    onClick = {
+                                        try {
+                                            val intent = context.packageManager.getLaunchIntentForPackage(app.packageName)
+                                            if (intent != null) context.startActivity(intent)
+                                        } catch (_: Exception) {}
+                                    },
+                                    onLongClick = {
+                                        selectedAppForDialog = app
+                                        isUnpinDialog = false
+                                    }
+                                )
+                                .padding(vertical = 10.dp, horizontal = 8.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
+                            app.icon?.let { iconDrawable ->
+                                Image(
+                                    bitmap = iconDrawable.toBitmap().asImageBitmap(),
+                                    contentDescription = app.title,
+                                    modifier = Modifier.size(36.dp)
+                                )
+                            }
+                            Spacer(modifier = Modifier.width(16.dp))
                             Text(
                                 text = app.title,
                                 color = WpTextWhite,
@@ -217,21 +260,58 @@ fun WindowsPhoneLauncherScreen() {
                 }
             }
         }
+
+        // 3. نافذة التأكيد للـ Pin / Unpin
+        selectedAppForDialog?.let { app ->
+            AlertDialog(
+                onDismissRequest = { selectedAppForDialog = null },
+                title = { Text(text = app.title, color = Color.White) },
+                text = {
+                    Text(
+                        text = if (isUnpinDialog) "Unpin this tile from Start?" else "Pin this app to Start?",
+                        color = Color.LightGray
+                    )
+                },
+                confirmButton = {
+                    TextButton(
+                        onClick = {
+                            if (isUnpinDialog) {
+                                pinnedTiles.remove(app)
+                            } else {
+                                if (!pinnedTiles.contains(app)) {
+                                    pinnedTiles.add(app)
+                                }
+                            }
+                            selectedAppForDialog = null
+                        }
+                    ) {
+                        Text(if (isUnpinDialog) "Unpin" else "Pin to Start", color = WpTileBlue)
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { selectedAppForDialog = null }) {
+                        Text("Cancel", color = Color.Gray)
+                    }
+                },
+                containerColor = WpTileDark
+            )
+        }
     }
 }
 
+// المربع الحي المدعوم بـ Flip Animation والأيقونة المباشرة
 @Composable
 fun FlipableMetroTile(
-    title: String,
-    backgroundColor: Color,
+    appItem: AppItem,
     modifier: Modifier = Modifier,
-    onClick: () -> Unit
+    onClick: () -> Unit,
+    onLongClick: () -> Unit
 ) {
     var flipped by remember { mutableStateOf(false) }
-    
+
     val rotation by animateFloatAsState(
         targetValue = if (flipped) 180f else 0f,
-        animationSpec = tween(durationMillis = 600),
+        animationSpec = tween(durationMillis = 500),
         label = "tileFlip"
     )
 
@@ -243,26 +323,37 @@ fun FlipableMetroTile(
                 cameraDistance = 8f * density
             }
             .clip(RoundedCornerShape(0.dp))
-            .background(backgroundColor)
-            .clickable {
-                flipped = !flipped
-                onClick()
-            },
+            .background(appItem.backgroundColor)
+            .combinedClickable(
+                onClick = {
+                    flipped = !flipped
+                    onClick()
+                },
+                onLongClick = onLongClick
+            ),
         contentAlignment = Alignment.BottomStart
     ) {
         Column(
-            modifier = Modifier.padding(12.dp)
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(12.dp),
+            verticalArrangement = Arrangement.SpaceBetween,
+            horizontalAlignment = Alignment.Start
         ) {
+            // أيقونة التطبيق الحقيقية (1. App Icon)
+            appItem.icon?.let { iconDrawable ->
+                Image(
+                    bitmap = iconDrawable.toBitmap().asImageBitmap(),
+                    contentDescription = appItem.title,
+                    modifier = Modifier.size(32.dp)
+                )
+            } ?: Spacer(modifier = Modifier.height(32.dp))
+
             Text(
-                text = title,
+                text = appItem.title,
                 color = WpTextWhite,
-                fontSize = 16.sp,
+                fontSize = 14.sp,
                 fontWeight = FontWeight.SemiBold
-            )
-            Text(
-                text = if (rotation > 90f) "update..." else "metro live",
-                color = WpTextWhite.copy(alpha = 0.6f),
-                fontSize = 10.sp
             )
         }
     }
