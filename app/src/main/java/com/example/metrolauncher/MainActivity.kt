@@ -18,6 +18,7 @@ import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -75,6 +76,7 @@ data class AppItem(
     val packageName: String,
     val icon: Drawable? = null,
     val backgroundColor: Color = WpTileBlue,
+    val isWide: Boolean = false, // خاصية تحديد ما إذا كان المربع عريضاً
     val isSystemWidget: Boolean = false,
     val widgetType: String = ""
 )
@@ -106,17 +108,18 @@ fun WindowsPhoneLauncherScreen() {
                 title = it.loadLabel(context.packageManager).toString(),
                 packageName = it.activityInfo.packageName,
                 icon = it.loadIcon(context.packageManager),
-                backgroundColor = WpTileBlue
+                backgroundColor = WpTileBlue,
+                isWide = false
             )
         }.sortedBy { it.title.lowercase() }
     }
 
     val pinnedTiles = remember {
         mutableStateListOf<AppItem>().apply {
-            add(AppItem("Phone", "com.android.dialer", backgroundColor = WpTileBlue))
-            add(AppItem("Messaging", "com.android.mms", backgroundColor = WpTileGreen))
-            add(AppItem("Battery", "", backgroundColor = WpTileOrange, isSystemWidget = true, widgetType = "battery"))
-            add(AppItem("Settings", "launcher.settings", backgroundColor = WpTilePurple, isSystemWidget = true, widgetType = "settings"))
+            add(AppItem("Phone", "com.android.dialer", backgroundColor = WpTileBlue, isWide = true))
+            add(AppItem("Messaging", "com.android.mms", backgroundColor = WpTileGreen, isWide = false))
+            add(AppItem("Battery", "", backgroundColor = WpTileOrange, isWide = false, isSystemWidget = true, widgetType = "battery"))
+            add(AppItem("Settings", "launcher.settings", backgroundColor = WpTilePurple, isWide = true, isSystemWidget = true, widgetType = "settings"))
         }
     }
 
@@ -174,6 +177,7 @@ fun WindowsPhoneLauncherScreen() {
                     }
                     Spacer(modifier = Modifier.height(16.dp))
 
+                    // شبكة المربعات الحية مع دعم أحجام مختلفة (Span)
                     LazyVerticalGrid(
                         columns = GridCells.Fixed(2),
                         modifier = Modifier
@@ -182,7 +186,10 @@ fun WindowsPhoneLauncherScreen() {
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                         verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        items(pinnedTiles) { tile ->
+                        items(
+                            items = pinnedTiles,
+                            span = { tile -> GridItemSpan(if (tile.isWide) 2 else 1) }
+                        ) { tile ->
                             FlipableMetroTile(
                                 appItem = tile,
                                 batteryLevel = batteryLevel,
