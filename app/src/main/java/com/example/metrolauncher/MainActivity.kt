@@ -1,14 +1,20 @@
 package com.example.metrolauncher
 
+import android.Manifest
 import android.content.Intent
 import android.content.IntentFilter
+import android.content.pm.PackageManager
 import android.content.pm.ResolveInfo
+import android.database.Cursor
 import android.graphics.drawable.Drawable
 import android.os.BatteryManager
 import android.os.Bundle
+import android.provider.CallLog
 import android.provider.Settings
+import android.telephony.TelephonyManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
@@ -35,13 +41,29 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.content.ContextCompat
 import androidx.core.graphics.drawable.toBitmap
 import java.text.SimpleDateFormat
 import java.util.*
 
 class MainActivity : ComponentActivity() {
+
+    private val requestPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { _ -> }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        
+        // طلب صلاحيات النظام الحساسة لقراءة المكالمات والرسائل لعرضها في الـ Widgets
+        requestPermissionLauncher.launch(
+            arrayOf(
+                Manifest.permission.READ_CALL_LOG,
+                Manifest.permission.READ_SMS,
+                Manifest.permission.READ_CONTACTS
+            )
+        )
+
         setContent {
             WindowsPhoneTheme {
                 WindowsPhoneLauncherScreen()
@@ -76,21 +98,22 @@ data class AppItem(
     val packageName: String,
     val icon: Drawable? = null,
     val backgroundColor: Color = WpTileBlue,
-    val isWide: Boolean = false, // خاصية تحديد ما إذا كان المربع عريضاً
+    val isWide: Boolean = false,
     val isSystemWidget: Boolean = false,
-    val widgetType: String = ""
+    val widgetType: String = "" // "battery", "calls", "sms", "settings"
 )
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun WindowsPhoneLauncherScreen() {
     val context = LocalContext.current
-    var currentScreen by remember { mutableStateOf(0) }
+    var currentScreen by remember { mutableStateOf(0) } // 0: Start, 1: All Apps, 2: System Settings Hub
 
     val currentTime = remember {
         mutableStateOf(SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date()))
     }
 
+    // قراءة نسبة البطارية من النظام
     val batteryLevel = remember {
         val intent = context.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
         val level = intent?.getIntExtra(BatteryManager.EXTRA_LEVEL, -1) ?: 0
@@ -98,6 +121,41 @@ fun WindowsPhoneLauncherScreen() {
         (level * 100 / scale)
     }
 
+    // قراءة المكالمات الفائتة الحقيقية من نظام أندرويد
+    val missedCallsCount = remember {
+        var count = 0
+        try {
+            val cursor: Cursor? = context.contentResolver.query(
+                CallLog.Calls.CONTENT_URI,
+                arrayOf(CallLog.Calls.TYPE),
+                "${CallLog.Calls.TYPE} = ? AND ${CallLog.Calls.NEW} = ?",
+                arrayOf(CallLog.Calls.MISSED_TYPE.toString(), "1"),
+                null
+            )
+            count = cursor?.count ?: 0
+            cursor?.close()
+        } catch (_: Exception) {}
+        count
+    }
+
+    // قراءة الرسائل القصيرة غير المقروءة الحقيقية من النظام
+    val unreadSmsCount = remember {
+        var count = 0
+        try {
+            val cursor: Cursor? = context.contentResolver.query(
+                android.net.Uri.parse("content://sms/inbox"),
+                arrayOf("_id"),
+                "read = 0",
+                null,
+                null
+            )
+            count = cursor?.count ?: 0
+            cursor?.close()
+        } catch (_: Exception) {}
+        count
+    }
+
+    // جلب التطبيقات المثبتة الفعلية
     val installedApps = remember {
         val intent = Intent(Intent.ACTION_MAIN, null).apply {
             addCategory(Intent.CATEGORY_LAUNCHER)
@@ -114,10 +172,11 @@ fun WindowsPhoneLauncherScreen() {
         }.sortedBy { it.title.lowercase() }
     }
 
+    // المربعات الحية المثبتة في شاشة البداية المرتبطة بالنظام
     val pinnedTiles = remember {
         mutableStateListOf<AppItem>().apply {
-            add(AppItem("Phone", "com.android.dialer", backgroundColor = WpTileBlue, isWide = true))
-            add(AppItem("Messaging", "com.android.mms", backgroundColor = WpTileGreen, isWide = false))
+            add(AppItem("Phone", "com.android.dialer", backgroundColor = WpTileBlue, isWide = true, isSystemWidget = true, widgetType = "calls"))
+            add(AppItem("Messaging", "com.android.mms", backgroundColor = WpTileGreen, isWide = false, isSystemWidget = true, widgetType = "sms"))
             add(AppItem("Battery", "", backgroundColor = WpTileOrange, isWide = false, isSystemWidget = true, widgetType = "battery"))
             add(AppItem("Settings", "launcher.settings", backgroundColor = WpTilePurple, isWide = true, isSystemWidget = true, widgetType = "settings"))
         }
@@ -142,6 +201,7 @@ fun WindowsPhoneLauncherScreen() {
     ) {
         when (currentScreen) {
             0 -> {
+                // شاشة البداية (Start Screen)
                 Column(modifier = Modifier.fillMaxSize()) {
                     Spacer(modifier = Modifier.height(28.dp))
                     Row(
@@ -177,7 +237,6 @@ fun WindowsPhoneLauncherScreen() {
                     }
                     Spacer(modifier = Modifier.height(16.dp))
 
-                    // شبكة المربعات الحية مع دعم أحجام مختلفة (Span)
                     LazyVerticalGrid(
                         columns = GridCells.Fixed(2),
                         modifier = Modifier
@@ -193,11 +252,28 @@ fun WindowsPhoneLauncherScreen() {
                             FlipableMetroTile(
                                 appItem = tile,
                                 batteryLevel = batteryLevel,
+                                missedCalls = missedCallsCount,
+                                unreadSms = unreadSmsCount,
                                 modifier = Modifier.fillMaxWidth(),
                                 onClick = {
                                     if (tile.isSystemWidget) {
-                                        if (tile.widgetType == "settings") {
-                                            currentScreen = 2
+                                        when (tile.widgetType) {
+                                            "settings" -> currentScreen = 2
+                                            "calls" -> {
+                                                try {
+                                                    val intent = Intent(Intent.ACTION_DIAL)
+                                                    context.startActivity(intent)
+                                                } catch (_: Exception) {}
+                                            }
+                                            "sms" -> {
+                                                try {
+                                                    val intent = Intent(Intent.ACTION_MAIN).apply {
+                                                        addCategory(Intent.CATEGORY_DEFAULT)
+                                                        type = "vnd.android-dir/mms-sms"
+                                                    }
+                                                    context.startActivity(intent)
+                                                } catch (_: Exception) {}
+                                            }
                                         }
                                     } else {
                                         try {
@@ -217,6 +293,7 @@ fun WindowsPhoneLauncherScreen() {
                 }
             }
             1 -> {
+                // شاشة قائمة التطبيقات (All Apps Drawer)
                 Column(modifier = Modifier.fillMaxSize()) {
                     Spacer(modifier = Modifier.height(28.dp))
                     Row(
@@ -289,6 +366,7 @@ fun WindowsPhoneLauncherScreen() {
                 }
             }
             2 -> {
+                // مركز إعدادات وصلاحيات النظام الشامل (System Settings & Integration Hub)
                 Column(modifier = Modifier.fillMaxSize()) {
                     Spacer(modifier = Modifier.height(28.dp))
                     Row(
@@ -297,7 +375,7 @@ fun WindowsPhoneLauncherScreen() {
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text(
-                            text = "settings",
+                            text = "system hub",
                             color = WpTextWhite,
                             fontSize = 32.sp,
                             fontWeight = FontWeight.Light
@@ -313,43 +391,54 @@ fun WindowsPhoneLauncherScreen() {
                     }
                     Spacer(modifier = Modifier.height(24.dp))
 
-                    Card(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable {
-                                try {
-                                    val intent = Intent(Settings.ACTION_HOME_SETTINGS)
-                                    context.startActivity(intent)
-                                } catch (_: Exception) {}
-                            },
-                        colors = CardDefaults.cardColors(containerColor = WpTileDark),
-                        shape = RoundedCornerShape(4.dp)
+                    LazyVerticalGrid(
+                        columns = GridCells.Fixed(1),
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
-                        Column(modifier = Modifier.padding(16.dp)) {
-                            Text(text = "Set as Default Launcher", color = WpTextWhite, fontSize = 18.sp, fontWeight = FontWeight.Bold)
-                            Spacer(modifier = Modifier.height(4.dp))
-                            Text(text = "Open system home settings to make Windows Phone your default launcher.", color = Color.LightGray, fontSize = 13.sp)
+                        item {
+                            SystemSettingCard(
+                                title = "Set Default Home Launcher",
+                                description = "Open system home settings to make Windows Phone your primary launcher.",
+                                onClick = {
+                                    try {
+                                        context.startActivity(Intent(Settings.ACTION_HOME_SETTINGS))
+                                    } catch (_: Exception) {}
+                                }
+                            )
                         }
-                    }
-
-                    Spacer(modifier = Modifier.height(16.dp))
-
-                    Card(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable {
-                                try {
-                                    val intent = Intent(Settings.ACTION_SETTINGS)
-                                    context.startActivity(intent)
-                                } catch (_: Exception) {}
-                            },
-                        colors = CardDefaults.cardColors(containerColor = WpTileDark),
-                        shape = RoundedCornerShape(4.dp)
-                    ) {
-                        Column(modifier = Modifier.padding(16.dp)) {
-                            Text(text = "Android System Settings", color = WpTextWhite, fontSize = 18.sp, fontWeight = FontWeight.Bold)
-                            Spacer(modifier = Modifier.height(4.dp))
-                            Text(text = "Access full device configuration and system permissions.", color = Color.LightGray, fontSize = 13.sp)
+                        item {
+                            SystemSettingCard(
+                                title = "Display & Brightness",
+                                description = "Configure screen timeout, brightness, and display settings.",
+                                onClick = {
+                                    try {
+                                        context.startActivity(Intent(Settings.ACTION_DISPLAY_SETTINGS))
+                                    } catch (_: Exception) {}
+                                }
+                            )
+                        }
+                        item {
+                            SystemSettingCard(
+                                title = "Sound & Volume",
+                                description = "Manage ringtones, media volumes, and device notifications.",
+                                onClick = {
+                                    try {
+                                        context.startActivity(Intent(Settings.ACTION_SOUND_SETTINGS))
+                                    } catch (_: Exception) {}
+                                }
+                            )
+                        }
+                        item {
+                            SystemSettingCard(
+                                title = "Full Android Settings",
+                                description = "Access all system configurations, accounts, and hardware settings.",
+                                onClick = {
+                                    try {
+                                        context.startActivity(Intent(Settings.ACTION_SETTINGS))
+                                    } catch (_: Exception) {}
+                                }
+                            )
                         }
                     }
                 }
@@ -382,11 +471,30 @@ fun WindowsPhoneLauncherScreen() {
     }
 }
 
+@Composable
+fun SystemSettingCard(title: String, description: String, onClick: () -> Unit) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick),
+        colors = CardDefaults.cardColors(containerColor = WpTileDark),
+        shape = RoundedCornerShape(4.dp)
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Text(text = title, color = WpTextWhite, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(text = description, color = Color.LightGray, fontSize = 13.sp)
+        }
+    }
+}
+
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun FlipableMetroTile(
     appItem: AppItem,
     batteryLevel: Int,
+    missedCalls: Int,
+    unreadSms: Int,
     modifier: Modifier = Modifier,
     onClick: () -> Unit,
     onLongClick: () -> Unit
@@ -425,10 +533,27 @@ fun FlipableMetroTile(
             horizontalAlignment = Alignment.Start
         ) {
             if (appItem.isSystemWidget) {
-                if (appItem.widgetType == "battery") {
-                    Text(text = "$batteryLevel%", color = WpTextWhite, fontSize = 24.sp, fontWeight = FontWeight.Bold)
-                } else {
-                    Spacer(modifier = Modifier.size(32.dp))
+                when (appItem.widgetType) {
+                    "battery" -> {
+                        Text(text = "$batteryLevel%", color = WpTextWhite, fontSize = 24.sp, fontWeight = FontWeight.Bold)
+                    }
+                    "calls" -> {
+                        if (missedCalls > 0) {
+                            Text(text = "$missedCalls missed", color = WpTextWhite, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                        } else {
+                            Spacer(modifier = Modifier.size(24.dp))
+                        }
+                    }
+                    "sms" -> {
+                        if (unreadSms > 0) {
+                            Text(text = "$unreadSms new", color = WpTextWhite, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                        } else {
+                            Spacer(modifier = Modifier.size(24.dp))
+                        }
+                    }
+                    else -> {
+                        Spacer(modifier = Modifier.size(24.dp))
+                    }
                 }
             } else {
                 appItem.icon?.let { iconDrawable ->
