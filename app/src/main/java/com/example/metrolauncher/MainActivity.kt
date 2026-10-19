@@ -5,8 +5,10 @@ import android.appwidget.AppWidgetHost
 import android.appwidget.AppWidgetHostView
 import android.appwidget.AppWidgetManager
 import android.appwidget.AppWidgetProviderInfo
+import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.content.SharedPreferences
 import android.content.pm.ResolveInfo
 import android.database.Cursor
 import android.graphics.drawable.Drawable
@@ -23,6 +25,7 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.grid.GridCells
@@ -45,6 +48,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.graphics.drawable.toBitmap
+import org.json.JSONArray
+import org.json.JSONObject
 import java.text.SimpleDateFormat
 import java.util.*
 
@@ -112,8 +117,7 @@ class MainActivity : ComponentActivity() {
                         selectWidgetLauncher.launch(pickIntent)
                     },
                     createWidgetView = { widgetId ->
-                        val info = appWidgetManager.getAppWidgetInfo(widgetId)
-                        appWidgetHost.createView(this, widgetId, info)
+                        appWidgetHost.createView(this, widgetId, appWidgetManager.getAppWidgetInfo(widgetId))
                     }
                 )
             }
@@ -157,12 +161,57 @@ data class SystemWidgetHolder(
 data class AppItem(
     val title: String,
     val packageName: String,
-    val icon: Drawable? = null,
-    val backgroundColor: Color = WpTileBlue,
-    val isWide: Boolean = false,
+    var backgroundColor: Color = WpTileBlue,
+    var isWide: Boolean = false,
     val isSystemWidget: Boolean = false,
     val widgetType: String = ""
 )
+
+// دالة مساعدة لحفظ واسترجاع التخطيط محلياً عبر SharedPreferences
+object TileStorageManager {
+    private const val PREF_NAME = "wp_launcher_prefs"
+    private const val KEY_TILES = "pinned_tiles_json"
+
+    fun saveTiles(context: Context, tiles: List<AppItem>) {
+        val prefs = context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
+        val jsonArray = JSONArray()
+        for (tile in tiles) {
+            if (!tile.isSystemWidget) {
+                val obj = JSONObject().apply {
+                    put("title", tile.title)
+                    put("packageName", tile.packageName)
+                    put("isWide", tile.isWide)
+                    put("color", tile.backgroundColor.value.toLong())
+                }
+                jsonArray.put(obj)
+            }
+        }
+        prefs.edit().putString(KEY_TILES, jsonArray.toString()).apply()
+    }
+
+    fun loadTiles(context: Context): List<AppItem>? {
+        val prefs = context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
+        val jsonStr = prefs.getString(KEY_TILES, null) ?: return null
+        try {
+            val jsonArray = JSONArray(jsonStr)
+            val list = mutableListOf<AppItem>()
+            for (i in 0 until jsonArray.length()) {
+                val obj = jsonArray.getJSONObject(i)
+                list.add(
+                    AppItem(
+                        title = obj.getString("title"),
+                        packageName = obj.getString("packageName"),
+                        isWide = obj.getBoolean("isWide"),
+                        backgroundColor = Color(obj.getLong("color"))
+                    )
+                )
+            }
+            return list
+        } catch (_: Exception) {
+            return null
+        }
+    }
+}
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -173,7 +222,6 @@ fun WindowsPhoneLauncherScreen(
     val context = LocalContext.current
     var currentScreen by remember { mutableStateOf(0) }
     var searchQuery by remember { mutableStateOf("") }
-
     val customWidgets = remember { mutableStateListOf<SystemWidgetHolder>() }
 
     val currentTime = remember {
@@ -228,7 +276,6 @@ fun WindowsPhoneLauncherScreen(
             AppItem(
                 title = it.loadLabel(context.packageManager).toString(),
                 packageName = it.activityInfo.packageName,
-                icon = it.loadIcon(context.packageManager),
                 backgroundColor = WpTileBlue,
                 isWide = false
             )
@@ -240,16 +287,27 @@ fun WindowsPhoneLauncherScreen(
     }
 
     val pinnedTiles = remember {
-        mutableStateListOf<AppItem>().apply {
-            add(AppItem("Phone", "com.android.dialer", backgroundColor = WpTileBlue, isWide = true, isSystemWidget = true, widgetType = "calls"))
-            add(AppItem("Messaging", "com.android.mms", backgroundColor = WpTileGreen, isWide = false, isSystemWidget = true, widgetType = "sms"))
-            add(AppItem("Battery", "", backgroundColor = WpTileOrange, isWide = false, isSystemWidget = true, widgetType = "battery"))
-            add(AppItem("Lock Screen", "", backgroundColor = WpTilePurple, isWide = false, isSystemWidget = true, widgetType = "lock"))
-            add(AppItem("Settings", "launcher.settings", backgroundColor = WpTileDark, isWide = true, isSystemWidget = true, widgetType = "settings"))
+        val saved = TileStorageManager.loadTiles(context)
+        if (saved != null && saved.isNotEmpty()) {
+            mutableStateListOf<AppItem>().apply {
+                add(AppItem("Phone", "com.android.dialer", WpTileBlue, true, true, "calls"))
+                add(AppItem("Messaging", "com.android.mms", WpTileGreen, false, true, "sms"))
+                add(AppItem("Battery", "", WpTileOrange, false, true, "battery"))
+                add(AppItem("Lock Screen", "", WpTilePurple, false, true, "lock"))
+                addAll(saved)
+            }
+        } else {
+            mutableStateListOf<AppItem>().apply {
+                add(AppItem("Phone", "com.android.dialer", WpTileBlue, true, true, "calls"))
+                add(AppItem("Messaging", "com.android.mms", WpTileGreen, false, true, "sms"))
+                add(AppItem("Battery", "", WpTileOrange, false, true, "battery"))
+                add(AppItem("Lock Screen", "", WpTilePurple, false, true, "lock"))
+                add(AppItem("Settings", "launcher.settings", WpTileDark, true, true, "settings"))
+            }
         }
     }
 
-    var selectedAppForDialog by remember { mutableStateOf<AppItem?>(null) }
+    var selectedTileForCustomization by remember { mutableStateOf<AppItem?>(null) }
 
     Box(
         modifier = Modifier
@@ -263,6 +321,14 @@ fun WindowsPhoneLauncherScreen(
                         currentScreen = 0
                     }
                 }
+            }
+            // إيماءة النقر المزدوج في الخلفية لقفل الشاشة
+            .pointerInput(Unit) {
+                detectTapGestures(
+                    onDoubleTap = {
+                        WpAccessibilityService.instance?.lockScreen()
+                    }
+                )
             }
             .padding(16.dp)
     ) {
@@ -283,12 +349,12 @@ fun WindowsPhoneLauncherScreen(
                         )
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
                         ) {
                             Text(
                                 text = "+ widget",
                                 color = WpTileBlue,
-                                fontSize = 16.sp,
+                                fontSize = 15.sp,
                                 fontWeight = FontWeight.Bold,
                                 modifier = Modifier
                                     .clickable {
@@ -328,8 +394,17 @@ fun WindowsPhoneLauncherScreen(
                             items = pinnedTiles,
                             span = { tile -> GridItemSpan(if (tile.isWide) 2 else 1) }
                         ) { tile ->
+                            val appIcon = remember(tile.packageName) {
+                                if (!tile.isSystemWidget) {
+                                    try {
+                                        context.packageManager.getApplicationIcon(tile.packageName)
+                                    } catch (_: Exception) { null }
+                                } else null
+                            }
+
                             FlipableMetroTile(
                                 appItem = tile,
+                                appIcon = appIcon,
                                 batteryLevel = batteryLevel,
                                 missedCalls = missedCallsCount,
                                 unreadSms = unreadSmsCount,
@@ -362,14 +437,11 @@ fun WindowsPhoneLauncherScreen(
                                     }
                                 },
                                 onLongClick = {
-                                    if (!tile.isSystemWidget) {
-                                        selectedAppForDialog = tile
-                                    }
+                                    selectedTileForCustomization = tile
                                 }
                             )
                         }
 
-                        // عرض الويدجت الحقيقية المضافة من قبل المستخدم (Android System Widgets)
                         items(
                             items = customWidgets,
                             span = { GridItemSpan(2) }
@@ -453,6 +525,7 @@ fun WindowsPhoneLauncherScreen(
                                         onLongClick = {
                                             if (!pinnedTiles.any { it.packageName == app.packageName }) {
                                                 pinnedTiles.add(app)
+                                                TileStorageManager.saveTiles(context, pinnedTiles)
                                             }
                                         }
                                     )
@@ -511,7 +584,7 @@ fun WindowsPhoneLauncherScreen(
                         item {
                             SystemSettingCard(
                                 title = "Set Default Home Launcher",
-                                description = "Make Metro UI your primary home launcher.",
+                                description = "Make Windows Phone your primary home launcher.",
                                 onClick = {
                                     try {
                                         context.startActivity(Intent(Settings.ACTION_HOME_SETTINGS))
@@ -522,7 +595,7 @@ fun WindowsPhoneLauncherScreen(
                         item {
                             SystemSettingCard(
                                 title = "Enable Accessibility Service",
-                                description = "Grant permission for system lock screen gestures.",
+                                description = "Grant permission for lock screen gestures (Double tap to lock).",
                                 onClick = {
                                     try {
                                         context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
@@ -533,7 +606,7 @@ fun WindowsPhoneLauncherScreen(
                         item {
                             SystemSettingCard(
                                 title = "Display & Brightness",
-                                description = "Manage system screen orientation and brightness.",
+                                description = "Manage screen orientation, timeout, and display settings.",
                                 onClick = {
                                     try {
                                         context.startActivity(Intent(Settings.ACTION_DISPLAY_SETTINGS))
@@ -544,7 +617,7 @@ fun WindowsPhoneLauncherScreen(
                         item {
                             SystemSettingCard(
                                 title = "Android Full Settings",
-                                description = "Access device hardware settings and accounts.",
+                                description = "Access full device configuration, accounts, and hardware settings.",
                                 onClick = {
                                     try {
                                         context.startActivity(Intent(Settings.ACTION_SETTINGS))
@@ -557,24 +630,48 @@ fun WindowsPhoneLauncherScreen(
             }
         }
 
-        selectedAppForDialog?.let { app ->
+        // نافذة تخصيص المربع (تغيير الحجم، اللون، أو الإزالة)
+        selectedTileForCustomization?.let { tile ->
             AlertDialog(
-                onDismissRequest = { selectedAppForDialog = null },
-                title = { Text(text = app.title, color = Color.White) },
-                text = { Text(text = "Unpin this tile from Start?", color = Color.LightGray) },
-                confirmButton = {
-                    TextButton(
-                        onClick = {
-                            pinnedTiles.remove(app)
-                            selectedAppForDialog = null
+                onDismissRequest = { selectedTileForCustomization = null },
+                title = { Text(text = tile.title, color = Color.White) },
+                text = {
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text("Customize Tile Layout & Color", color = Color.LightGray, fontSize = 14.sp)
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Button(onClick = {
+                                tile.isWide = !tile.isWide
+                                TileStorageManager.saveTiles(context, pinnedTiles)
+                                selectedTileForCustomization = null
+                            }, colors = ButtonDefaults.buttonColors(containerColor = WpTileBlue)) {
+                                Text(if (tile.isWide) "Make Normal" else "Make Wide")
+                            }
                         }
-                    ) {
-                        Text("Unpin", color = WpTileBlue)
+                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Box(modifier = Modifier.size(32.dp).background(WpTileBlue).clickable { tile.backgroundColor = WpTileBlue; TileStorageManager.saveTiles(context, pinnedTiles); selectedTileForCustomization = null })
+                            Box(modifier = Modifier.size(32.dp).background(WpTileGreen).clickable { tile.backgroundColor = WpTileGreen; TileStorageManager.saveTiles(context, pinnedTiles); selectedTileForCustomization = null })
+                            Box(modifier = Modifier.size(32.dp).background(WpTileOrange).clickable { tile.backgroundColor = WpTileOrange; TileStorageManager.saveTiles(context, pinnedTiles); selectedTileForCustomization = null })
+                            Box(modifier = Modifier.size(32.dp).background(WpTilePurple).clickable { tile.backgroundColor = WpTilePurple; TileStorageManager.saveTiles(context, pinnedTiles); selectedTileForCustomization = null })
+                        }
+                    }
+                },
+                confirmButton = {
+                    if (!tile.isSystemWidget) {
+                        TextButton(
+                            onClick = {
+                                pinnedTiles.remove(tile)
+                                TileStorageManager.saveTiles(context, pinnedTiles)
+                                selectedTileForCustomization = null
+                            }
+                        ) {
+                            Text("Unpin Tile", color = Color.Red)
+                        }
                     }
                 },
                 dismissButton = {
-                    TextButton(onClick = { selectedAppForDialog = null }) {
-                        Text("Cancel", color = Color.Gray)
+                    TextButton(onClick = { selectedTileForCustomization = null }) {
+                        Text("Close", color = Color.Gray)
                     }
                 },
                 containerColor = WpTileDark
@@ -604,6 +701,7 @@ fun SystemSettingCard(title: String, description: String, onClick: () -> Unit) {
 @Composable
 fun FlipableMetroTile(
     appItem: AppItem,
+    appIcon: Drawable?,
     batteryLevel: Int,
     missedCalls: Int,
     unreadSms: Int,
@@ -671,7 +769,7 @@ fun FlipableMetroTile(
                     }
                 }
             } else {
-                appItem.icon?.let { iconDrawable ->
+                appIcon?.let { iconDrawable ->
                     Image(
                         bitmap = iconDrawable.toBitmap().asImageBitmap(),
                         contentDescription = appItem.title,
